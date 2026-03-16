@@ -1,100 +1,89 @@
 // api/emotes.js
 const express = require('express');
 const cors = require('cors');
+const fetch = require('node-fetch'); // atau global fetch kalau Vercel Node >=18
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 
-// Load SEMUA emote sekali saja (kalau masih crash, pecah jadi multiple files nanti)
-let allEmotes = [];
-try {
-  allEmotes = require('../data/emotes.json');
-  console.log(`Loaded ${allEmotes.length} emotes successfully`);
-} catch (err) {
-  console.error('Failed to load emotes.json:', err.message);
-  allEmotes = []; // fallback kosong biar nggak crash total
-}
+const ROBLOX_CATALOG_URL = 'https://catalog.roblox.com/v1/search/items';
+const ITEMS_PER_PAGE = 30;
 
-const DEFAULT_PER_PAGE = 30;
-
-app.get('/', (req, res) => {
+app.get('/', async (req, res) => {
   try {
-    let page = parseInt(req.query.page) || 1;
-    if (page < 1) page = 1;
+    const page = parseInt(req.query.page) || 1;
+    const search = (req.query.search || '').trim();
+    const fraction = parseFloat(req.query.fraction || '1');
+    const part = parseInt(req.query.part) || 1;
 
-    const search = (req.query.search || '').toLowerCase().trim();
+    if (page < 1) return res.status(400).json({ error: 'Invalid page' });
 
-    // Parse fraction (contoh: 0.5, 1, 0.25)
-    let fraction = parseFloat(req.query.fraction || '1');
-    if (isNaN(fraction) || fraction <= 0 || fraction > 1) fraction = 1;
+    // Hitung cursor atau offset simulation (Roblox pakai cursor, bukan page)
+    // Untuk sederhana, kita pakai limit & cursor dari response sebelumnya, tapi untuk sekarang simulate page dengan multiple request kalau perlu
+    // Catatan: cursor real butuh chaining request — untuk awal pakai limit tinggi kalau bisa
 
-    // part mulai dari 1
-    let part = parseInt(req.query.part) || 1;
-    if (part < 1) part = 1;
-
-    // Filter dulu berdasarkan search
-    let filtered = allEmotes;
-    if (search) {
-      filtered = allEmotes.filter(emote =>
-        emote.name?.toLowerCase().includes(search) ||
-        emote.creator?.toLowerCase().includes(search)
-      );
-    }
-
-    const totalItems = filtered.length;
-    if (totalItems === 0) {
-      return res.json({
-        page, part, fraction,
-        perPage: 0, totalItems: 0, totalPages: 0,
-        data: []
-      });
-    }
-
-    // Hitung items per fraction/part
-    const itemsPerFullPage = DEFAULT_PER_PAGE;
-    const itemsPerPart = Math.floor(itemsPerFullPage * fraction);
-
-    // Hitung start & end index global
-    const itemsBeforeThisPage = (page - 1) * itemsPerFullPage;
-    const startOfThisPage = itemsBeforeThisPage + (part - 1) * itemsPerPart;
-
-    let endOfThisPart = startOfThisPage + itemsPerPart;
-    // Jangan lewatin akhir page penuh
-    const endOfThisPage = itemsBeforeThisPage + itemsPerFullPage;
-    if (endOfThisPart > endOfThisPage) endOfThisPart = endOfThisPage;
-
-    // Slice data
-    const result = filtered.slice(startOfThisPage, endOfThisPart).map(emote => {
-      const animId = emote.animationId || `rbxassetid://${emote.id}`;
-      return {
-        id: emote.id,
-        name: emote.name || "Unnamed Emote",
-        creator: emote.creator || "Unknown",
-        price: emote.price || 0,
-        animationId: animId,
-        thumbnail: `rbxthumb://type=Asset&id=${emote.id}&w=420&h=420`
-      };
+    const params = new URLSearchParams({
+      assetTypes: 'EmoteAnimation',          // atau value numeric kalau string gagal: '64'
+      keyword: search,
+      limit: ITEMS_PER_PAGE.toString(),
+      // cursor: '' untuk page 1, ambil dari response.nextPageCursor untuk next
+      // sortType: '3', // relevance
+      // includeNotForSale: 'true'  // kalau mau offsale (kadang work)
     });
 
-    // Hitung metadata
-    const totalPartsPerPage = Math.ceil(itemsPerFullPage / itemsPerPart);
-    const totalPagesApprox = Math.ceil(totalItems / itemsPerFullPage);
+    // Untuk pagination sederhana: Roblox pakai cursor, jadi untuk page >1 butuh fetch sequential
+    // Untuk sekarang: asumsikan page 1 dulu, nanti extend kalau work
+    if (page > 1) {
+      // Logic cursor chaining bisa ditambah kalau test sukses
+      return res.json({ error: 'Pagination via cursor not implemented yet - test page 1 first' });
+    }
+
+    const url = `\( {ROBLOX_CATALOG_URL}? \){params}`;
+    console.log('Fetching from Roblox:', url);
+
+    const response = await fetch(url, {
+      headers: {
+        'Accept': 'application/json',
+        // User-Agent biar mirip browser (kadang Roblox block default fetch)
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+      }
+    });
+
+    if (!response.ok) {
+      throw new Error(`Roblox API error: ${response.status} ${response.statusText}`);
+    }
+
+    const data = await response.json();
+
+    // Parse data.data → array items
+    const emotes = (data.data || []).map(item => ({
+      id: item.id,
+      name: item.name,
+      creator: item.creatorName || item.creatorTargetId ? `User/${item.creatorTargetId}` : 'Unknown',
+      price: item.price || (item.isForSale ? item.price : 0),
+      animationId: `rbxassetid://${item.id}`, // fallback; resolve real via assetdelivery kalau perlu
+      thumbnail: `rbxthumb://type=Asset&id=${item.id}&w=420&h=420`
+    }));
+
+    // Apply fraction & part slicing (sama seperti sebelumnya)
+    const itemsPerPart = Math.floor(ITEMS_PER_PAGE * fraction);
+    const start = (part - 1) * itemsPerPart;
+    const sliced = emotes.slice(start, start + itemsPerPart);
 
     res.json({
       page,
       part,
       fraction,
       itemsPerPart,
-      totalPartsThisPage: totalPartsPerPage,
-      totalPagesApprox,
-      totalItems,
-      data: result
+      totalItemsThisPage: emotes.length,
+      hasMore: !!data.nextPageCursor,  // untuk info pagination lanjutan
+      data: sliced
     });
 
   } catch (err) {
-    console.error('API error:', err);
-    res.status(500).json({ error: 'Server error', details: err.message });
+    console.error('Proxy error:', err.message);
+    res.status(500).json({ error: 'Failed to fetch from Roblox', details: err.message });
   }
 });
 
