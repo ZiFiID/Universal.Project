@@ -1,65 +1,66 @@
-// emote.js - Fetch Roblox emotes by keyword and page (30 per page)
-import fetch from "node-fetch"; // Node/Vercel, browser fetch works natively
+import fetch from "node-fetch";
 
-/**
- * Fetch emote data from Roblox catalog
- * @param {string} keyword - search keyword
- * @param {number} page - page number, 1 = first page
- * @param {number} limit - items per page (default 30)
- * @returns {Promise<{results:Array, page:number, hasNext:boolean}>}
- */
-export async function fetchEmotes(keyword, page = 1, limit = 30) {
-  if (!keyword) throw new Error("Keyword 'q' is required");
+export default async function handler(req, res) {
+  try {
+    const { keyword = "", page = 1, perPage = 28 } = req.query;
+    const startIndex = (page - 1) * perPage;
 
-  const catalogUrl = `https://catalog.roblox.com/v1/search/items?Category=12&Keyword=${encodeURIComponent(
-    keyword
-  )}&Limit=${limit}`;
+    // 1. Search emote catalog via Roblox catalog search API (undocumented but works)
+    const searchUrl = `https://catalog.roblox.com/v1/search/items?Category=3&Subcategory=9&SortType=Relevance&Keyword=${encodeURIComponent(
+      keyword
+    )}&Limit=100`;
+    
+    const searchRes = await fetch(searchUrl);
+    const searchData = await searchRes.json();
 
-  let cursor = null;
-  let currentPage = 1;
-  let results = [];
+    if (!searchData || !searchData.data) {
+      return res.status(404).json({ error: "No data found" });
+    }
 
-  // Iterate until the requested page
-  while (currentPage <= page) {
-    const url = cursor ? `${catalogUrl}&Cursor=${cursor}` : catalogUrl;
+    const items = searchData.data.slice(startIndex, startIndex + perPage);
 
-    const res = await fetch(url, {
-      headers: {
-        "User-Agent": "Roblox/WinInet",
-        "Content-Type": "application/json"
-      }
+    // Map items to API output
+    const results = await Promise.all(
+      items.map(async (item) => {
+        // 2. Get detailed product info
+        let info = {};
+        try {
+          const infoRes = await fetch(
+            `https://api.roblox.com/marketplace/productinfo?assetId=${item.id}`
+          );
+          info = await infoRes.json();
+        } catch {}
+
+        // 3. Get animationId via assetdelivery
+        let animationId = `rbxassetid://${item.id}`;
+        try {
+          const assetRes = await fetch(
+            `https://assetdelivery.roblox.com/v1/asset/?id=${item.id}`
+          );
+          const assetText = await assetRes.text();
+          const match = assetText.match(/<url>.*?id=(\d+).*?<\/url>/);
+          if (match) animationId = `rbxassetid://${match[1]}`;
+        } catch {}
+
+        return {
+          name: info.Name || item.name || "Unknown",
+          creator: info.Creator && info.Creator.Name ? info.Creator.Name : "Roblox",
+          price: info.PriceInRobux || (info.IsForSale === false ? "Offsale" : 0),
+          animationId,
+          thumbnail: `rbxthumb://type=Asset&id=${item.id}&w=420&h=420`,
+          assetId: item.id,
+        };
+      })
+    );
+
+    res.status(200).json({
+      page: parseInt(page),
+      perPage: parseInt(perPage),
+      total: searchData.totalResults,
+      results,
     });
-
-    const data = await res.json();
-    if (!data || !data.data) break;
-
-    results = data.data;
-    cursor = data.nextPageCursor || null;
-    currentPage++;
-    if (!cursor) break;
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Server error" });
   }
-
-  // Map results to standard emote format with real names and creators
-  const pageResults = results.map(item => {
-    const price =
-      item.priceInRobux === undefined
-        ? 0
-        : item.priceInRobux === 1
-        ? 1 // offsale
-        : item.priceInRobux;
-
-    return {
-      name: item.name || "Unknown",
-      animationId: item.assetId,
-      price: price,
-      creator: item.creator?.name || "Unknown",
-      thumbnail: `rbxthumb://type=Asset&id=${item.assetId}&w=420&h=420`
-    };
-  });
-
-  return {
-    results: pageResults,
-    page,
-    hasNext: !!cursor
-  };
 }
