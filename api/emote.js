@@ -1,10 +1,9 @@
 export default async function handler(req, res) {
-  const q = req.query.q || "";           // keyword search
-  const cursor = req.query.cursor || null; // optional untuk page berikutnya
-  const limit = 12;                       // 1 page = 12 emote, sama kayak marketplace
+  const q = req.query.q || "";
+  const cursor = req.query.cursor || null;
+  const limit = 12;
 
   try {
-    // 1️⃣ Fetch catalog Roblox
     const url = `https://catalog.roblox.com/v1/search/items?category=12&keyword=${encodeURIComponent(q)}&limit=${limit}${cursor ? `&cursor=${cursor}` : ""}`;
     const resp = await fetch(url);
     const data = await resp.json();
@@ -16,8 +15,27 @@ export default async function handler(req, res) {
     for (const item of data.data) {
       const assetId = item.id;
       let animationId = assetId;
+      let name = "Unknown";
+      let creator = "Roblox";
+      let price = 0;
 
-      // 2️⃣ Ambil animationId asli dari asset delivery
+      // 1️⃣ Ambil data detail asset (Marketplace API)
+      try {
+        const infoResp = await fetch(`https://api.roblox.com/marketplace/productinfo?assetId=${assetId}`);
+        const info = await infoResp.json();
+
+        if (info) {
+          name = info.Name || "Unknown";
+          creator = info.Creator && info.Creator.Name ? info.Creator.Name : (info.CreatorName || "Roblox");
+          if (info.IsForSale === false) {
+            price = 1; // Offsale
+          } else {
+            price = info.PriceInRobux ?? 0;
+          }
+        }
+      } catch {}
+
+      // 2️⃣ Ambil animationId asli
       try {
         const assetResp = await fetch(`https://assetdelivery.roblox.com/v1/asset/?id=${assetId}`);
         const assetText = await assetResp.text();
@@ -27,17 +45,15 @@ export default async function handler(req, res) {
         if (match) animationId = match[1];
       } catch {}
 
-      // 3️⃣ Push hasil ke array
       results.push({
-        name: item.name || "Unknown",
-        animationId: animationId,
-        price: item.price ?? 0,
-        creator: item.creator?.name || item.creatorName || "Roblox",
+        name,
+        animationId,
+        price,
+        creator,
         thumbnail: `rbxthumb://type=Asset&id=${assetId}&w=420&h=420`
       });
     }
 
-    // 4️⃣ Return hasil + cursor untuk page berikutnya
     res.status(200).json({
       results,
       nextCursor: data.nextPageCursor || null
