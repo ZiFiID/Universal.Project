@@ -1,63 +1,55 @@
+// emotes.js - Full API Nameless Emote Poser (thumbnail rbxthumb)
 export default async function handler(req, res) {
-  const q = req.query.q || "";
-  const limit = 30;
+  const q = req.query.q || "";       // keyword search
+  const limit = 50;                  // jumlah emote per search
 
   try {
-
-    const catalog = await fetch(
+    // 1️⃣ Search catalog Roblox (EmoteAnimation)
+    const catalogResp = await fetch(
       `https://catalog.roblox.com/v1/search/items?category=12&keyword=${encodeURIComponent(q)}&limit=${limit}`
     );
+    const catalogData = await catalogResp.json();
 
-    const catalogData = await catalog.json();
-
-    const ids = catalogData.data.map(v => v.id).join(",");
-
-    const thumbReq = await fetch(
-      `https://thumbnails.roblox.com/v1/assets?assetIds=${ids}&size=420x420&format=Png`
-    );
-
-    const thumbData = await thumbReq.json();
-
-    const thumbMap = {};
-    for (const t of thumbData.data) {
-      thumbMap[t.targetId] = t.imageUrl;
+    if (!catalogData || !catalogData.data) {
+      return res.status(200).json([]);
     }
 
+    // 2️⃣ Ambil thumbnail langsung dari rbxthumb format
     const results = [];
 
     for (const item of catalogData.data) {
-
       const assetId = item.id;
       let animationId = assetId;
 
+      // 3️⃣ Ambil animationId asli dari asset delivery
       try {
-
-        const asset = await fetch(
-          `https://assetdelivery.roblox.com/v1/asset/?id=${assetId}`
-        );
-
-        const text = await asset.text();
-
-        const match =
-          text.match(/rbxassetid:\/\/(\d+)/) ||
-          text.match(/id=(\d+)/);
+        const assetResp = await fetch(`https://assetdelivery.roblox.com/v1/asset/?id=${assetId}`);
+        const assetText = await assetResp.text();
+        const match = assetText.match(/rbxassetid:\/\/(\d+)/)
+                  || assetText.match(/AnimationId.*?(\d+)/)
+                  || assetText.match(/id=(\d+)/);
 
         if (match) animationId = match[1];
+      } catch (err) {
+        // fallback tetap pakai assetId
+      }
 
-      } catch {}
-
+      // 4️⃣ Push hasil ke array
       results.push({
-        name: item.name,
-        assetId: assetId,
+        name: item.name || "Unknown",
         animationId: animationId,
         price: item.price ?? 0,
-        thumbnail: thumbMap[assetId] || null
+        creator: item.creator?.name || item.creatorName || "Roblox",
+        // thumbnail langsung pakai rbxthumb untuk Roblox GUI
+        thumbnail: `rbxthumb://type=Asset&id=${assetId}&w=420&h=420`
       });
     }
 
+    // 5️⃣ Return JSON
     res.status(200).json(results);
 
   } catch (err) {
-    res.status(500).json({ error: "failed" });
+    console.error(err);
+    res.status(500).json({ error: "failed to fetch emotes" });
   }
-}
+}q
