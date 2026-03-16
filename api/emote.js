@@ -1,65 +1,76 @@
-import fetch from "node-fetch";
+// api/emotes.js
+const express = require('express');
+const cors = require('cors');
 
-export default async function handler(req, res) {
-  try {
-    const { keyword = "", page = 1, perPage = 30 } = req.query;
-    const startIndex = (page - 1) * perPage;
+const app = express();
+app.use(cors());
+app.use(express.json());
 
-    // 1. Search emote catalog (max 100 per fetch, nanti kita slice)
-    const searchUrl = `https://catalog.roblox.com/v1/search/items?Category=3&Subcategory=9&SortType=Relevance&Keyword=${encodeURIComponent(
-      keyword
-    )}&Limit=100`;
-    
-    const searchRes = await fetch(searchUrl);
-    const searchData = await searchRes.json();
+// Load data (bisa dari file, atau database nanti)
+const allEmotes = require('../data/emotes.json'); // sesuaikan path kalau pakai Vercel
 
-    if (!searchData || !searchData.data) {
-      return res.status(404).json({ error: "No data found" });
-    }
+const ITEMS_PER_PAGE = 30;
 
-    // Slice per page, maksimal perPage (30)
-    const items = searchData.data.slice(startIndex, startIndex + perPage);
+// GET /api/emotes?page=1&search=wave
+app.get('/', (req, res) => {
+  const page = parseInt(req.query.page) || 1;
+  const search = (req.query.search || '').toLowerCase().trim();
 
-    const results = await Promise.all(
-      items.map(async (item) => {
-        let info = {};
-        try {
-          const infoRes = await fetch(
-            `https://api.roblox.com/marketplace/productinfo?assetId=${item.id}`
-          );
-          info = await infoRes.json();
-        } catch {}
+  let filtered = allEmotes;
 
-        // Dapatkan animationId via assetdelivery
-        let animationId = `rbxassetid://${item.id}`;
-        try {
-          const assetRes = await fetch(
-            `https://assetdelivery.roblox.com/v1/asset/?id=${item.id}`
-          );
-          const assetText = await assetRes.text();
-          const match = assetText.match(/<url>.*?id=(\d+).*?<\/url>/);
-          if (match) animationId = `rbxassetid://${match[1]}`;
-        } catch {}
-
-        return {
-          name: info.Name || item.name || "Unknown",
-          creator: info.Creator && info.Creator.Name ? info.Creator.Name : "Roblox",
-          price: info.PriceInRobux || (info.IsForSale === false ? "Offsale" : 0),
-          animationId,
-          thumbnail: `rbxthumb://type=Asset&id=${item.id}&w=420&h=420`,
-          assetId: item.id,
-        };
-      })
+  if (search) {
+    filtered = allEmotes.filter(emote =>
+      emote.name.toLowerCase().includes(search) ||
+      (emote.creator && emote.creator.toLowerCase().includes(search))
     );
-
-    res.status(200).json({
-      page: parseInt(page),
-      perPage: parseInt(perPage),
-      total: searchData.totalResults,
-      results,
-    });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: "Server error" });
   }
-}
+
+  const total = filtered.length;
+  const start = (page - 1) * ITEMS_PER_PAGE;
+  const end = start + ITEMS_PER_PAGE;
+
+  const result = filtered.slice(start, end).map(emote => {
+    // Pastikan animationId selalu ada
+    const animId = emote.animationId || `rbxassetid://${emote.id}`;
+
+    return {
+      id: emote.id,
+      name: emote.name,
+      creator: emote.creator || "Unknown",
+      price: emote.price || 0,
+      animationId: animId,
+      thumbnail: `rbxthumb://type=Asset&id=${emote.id}&w=420&h=420`
+    };
+  });
+
+  res.json({
+    page,
+    perPage: ITEMS_PER_PAGE,
+    totalItems: total,
+    totalPages: Math.ceil(total / ITEMS_PER_PAGE),
+    data: result
+  });
+});
+
+// GET /api/emotes/:id — detail satu emote
+app.get('/:id', (req, res) => {
+  const id = parseInt(req.params.id);
+  const emote = allEmotes.find(e => e.id === id);
+
+  if (!emote) {
+    return res.status(404).json({ error: "Emote not found" });
+  }
+
+  const animId = emote.animationId || `rbxassetid://${emote.id}`;
+
+  res.json({
+    id: emote.id,
+    name: emote.name,
+    creator: emote.creator || "Unknown",
+    price: emote.price || 0,
+    animationId: animId,
+    thumbnail: `rbxthumb://type=Asset&id=${emote.id}&w=420&h=420`
+  });
+});
+
+module.exports = app;
