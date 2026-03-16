@@ -2,10 +2,10 @@ import fetch from "node-fetch";
 
 export default async function handler(req, res) {
   try {
-    const { keyword = "", page = 1, perPage = 28 } = req.query;
+    const { keyword = "", page = 1, perPage = 30 } = req.query;
     const startIndex = (page - 1) * perPage;
 
-    // 1. Search emote catalog via Roblox catalog search API (undocumented but works)
+    // 1. Search emote catalog (max 100 per fetch, nanti kita slice)
     const searchUrl = `https://catalog.roblox.com/v1/search/items?Category=3&Subcategory=9&SortType=Relevance&Keyword=${encodeURIComponent(
       keyword
     )}&Limit=100`;
@@ -17,12 +17,11 @@ export default async function handler(req, res) {
       return res.status(404).json({ error: "No data found" });
     }
 
+    // Slice per page, maksimal perPage (30)
     const items = searchData.data.slice(startIndex, startIndex + perPage);
 
-    // Map items to API output
     const results = await Promise.all(
       items.map(async (item) => {
-        // 2. Get detailed product info
         let info = {};
         try {
           const infoRes = await fetch(
@@ -31,7 +30,7 @@ export default async function handler(req, res) {
           info = await infoRes.json();
         } catch {}
 
-        // 3. Get animationId via assetdelivery
+        // Dapatkan animationId via assetdelivery
         let animationId = `rbxassetid://${item.id}`;
         try {
           const assetRes = await fetch(
