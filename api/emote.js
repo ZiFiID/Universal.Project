@@ -6,71 +6,96 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// Load data (bisa dari file, atau database nanti)
-const allEmotes = require('../data/emotes.json'); // sesuaikan path kalau pakai Vercel
+// Load SEMUA emote sekali saja (kalau masih crash, pecah jadi multiple files nanti)
+let allEmotes = [];
+try {
+  allEmotes = require('../data/emotes.json');
+  console.log(`Loaded ${allEmotes.length} emotes successfully`);
+} catch (err) {
+  console.error('Failed to load emotes.json:', err.message);
+  allEmotes = []; // fallback kosong biar nggak crash total
+}
 
-const ITEMS_PER_PAGE = 30;
+const DEFAULT_PER_PAGE = 30;
 
-// GET /api/emotes?page=1&search=wave
 app.get('/', (req, res) => {
-  const page = parseInt(req.query.page) || 1;
-  const search = (req.query.search || '').toLowerCase().trim();
+  try {
+    let page = parseInt(req.query.page) || 1;
+    if (page < 1) page = 1;
 
-  let filtered = allEmotes;
+    const search = (req.query.search || '').toLowerCase().trim();
 
-  if (search) {
-    filtered = allEmotes.filter(emote =>
-      emote.name.toLowerCase().includes(search) ||
-      (emote.creator && emote.creator.toLowerCase().includes(search))
-    );
+    // Parse fraction (contoh: 0.5, 1, 0.25)
+    let fraction = parseFloat(req.query.fraction || '1');
+    if (isNaN(fraction) || fraction <= 0 || fraction > 1) fraction = 1;
+
+    // part mulai dari 1
+    let part = parseInt(req.query.part) || 1;
+    if (part < 1) part = 1;
+
+    // Filter dulu berdasarkan search
+    let filtered = allEmotes;
+    if (search) {
+      filtered = allEmotes.filter(emote =>
+        emote.name?.toLowerCase().includes(search) ||
+        emote.creator?.toLowerCase().includes(search)
+      );
+    }
+
+    const totalItems = filtered.length;
+    if (totalItems === 0) {
+      return res.json({
+        page, part, fraction,
+        perPage: 0, totalItems: 0, totalPages: 0,
+        data: []
+      });
+    }
+
+    // Hitung items per fraction/part
+    const itemsPerFullPage = DEFAULT_PER_PAGE;
+    const itemsPerPart = Math.floor(itemsPerFullPage * fraction);
+
+    // Hitung start & end index global
+    const itemsBeforeThisPage = (page - 1) * itemsPerFullPage;
+    const startOfThisPage = itemsBeforeThisPage + (part - 1) * itemsPerPart;
+
+    let endOfThisPart = startOfThisPage + itemsPerPart;
+    // Jangan lewatin akhir page penuh
+    const endOfThisPage = itemsBeforeThisPage + itemsPerFullPage;
+    if (endOfThisPart > endOfThisPage) endOfThisPart = endOfThisPage;
+
+    // Slice data
+    const result = filtered.slice(startOfThisPage, endOfThisPart).map(emote => {
+      const animId = emote.animationId || `rbxassetid://${emote.id}`;
+      return {
+        id: emote.id,
+        name: emote.name || "Unnamed Emote",
+        creator: emote.creator || "Unknown",
+        price: emote.price || 0,
+        animationId: animId,
+        thumbnail: `rbxthumb://type=Asset&id=${emote.id}&w=420&h=420`
+      };
+    });
+
+    // Hitung metadata
+    const totalPartsPerPage = Math.ceil(itemsPerFullPage / itemsPerPart);
+    const totalPagesApprox = Math.ceil(totalItems / itemsPerFullPage);
+
+    res.json({
+      page,
+      part,
+      fraction,
+      itemsPerPart,
+      totalPartsThisPage: totalPartsPerPage,
+      totalPagesApprox,
+      totalItems,
+      data: result
+    });
+
+  } catch (err) {
+    console.error('API error:', err);
+    res.status(500).json({ error: 'Server error', details: err.message });
   }
-
-  const total = filtered.length;
-  const start = (page - 1) * ITEMS_PER_PAGE;
-  const end = start + ITEMS_PER_PAGE;
-
-  const result = filtered.slice(start, end).map(emote => {
-    // Pastikan animationId selalu ada
-    const animId = emote.animationId || `rbxassetid://${emote.id}`;
-
-    return {
-      id: emote.id,
-      name: emote.name,
-      creator: emote.creator || "Unknown",
-      price: emote.price || 0,
-      animationId: animId,
-      thumbnail: `rbxthumb://type=Asset&id=${emote.id}&w=420&h=420`
-    };
-  });
-
-  res.json({
-    page,
-    perPage: ITEMS_PER_PAGE,
-    totalItems: total,
-    totalPages: Math.ceil(total / ITEMS_PER_PAGE),
-    data: result
-  });
-});
-
-// GET /api/emotes/:id — detail satu emote
-app.get('/:id', (req, res) => {
-  const id = parseInt(req.params.id);
-  const emote = allEmotes.find(e => e.id === id);
-
-  if (!emote) {
-    return res.status(404).json({ error: "Emote not found" });
-  }
-
-  const animId = emote.animationId || `rbxassetid://${emote.id}`;
-
-  res.json({
-    id: emote.id,
-    name: emote.name,
-    creator: emote.creator || "Unknown",
-    price: emote.price || 0,
-    animationId: animId,
-    thumbnail: `rbxthumb://type=Asset&id=${emote.id}&w=420&h=420`
-  });
 });
 
 module.exports = app;
