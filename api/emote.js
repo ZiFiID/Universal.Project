@@ -1,40 +1,65 @@
-local HttpService = game:GetService("HttpService")
-local Players = game:GetService("Players")
-local player = Players.LocalPlayer
+// emote.js - Fetch Roblox emotes by keyword and page (30 per page)
+import fetch from "node-fetch"; // Node/Vercel, browser fetch works natively
 
-local searchKeyword = "higuruma"
-local nextCursor = nil
+/**
+ * Fetch emote data from Roblox catalog
+ * @param {string} keyword - search keyword
+ * @param {number} page - page number, 1 = first page
+ * @param {number} limit - items per page (default 30)
+ * @returns {Promise<{results:Array, page:number, hasNext:boolean}>}
+ */
+export async function fetchEmotes(keyword, page = 1, limit = 30) {
+  if (!keyword) throw new Error("Keyword 'q' is required");
 
-local function fetchPage()
-    local url = "https://universal-project-rho.vercel.app/api/emote?q="..searchKeyword
-    if nextCursor then
-        url = url.."&cursor="..nextCursor
-    end
+  const catalogUrl = `https://catalog.roblox.com/v1/search/items?Category=12&Keyword=${encodeURIComponent(
+    keyword
+  )}&Limit=${limit}`;
 
-    local success, data = pcall(function()
-        return HttpService:JSONDecode(game:HttpGet(url))
-    end)
+  let cursor = null;
+  let currentPage = 1;
+  let results = [];
 
-    if not success then
-        warn("Gagal fetch API:", data)
-        return
-    end
+  // Iterate until the requested page
+  while (currentPage <= page) {
+    const url = cursor ? `${catalogUrl}&Cursor=${cursor}` : catalogUrl;
 
-    -- Print hasil page ini
-    for i, emote in ipairs(data.results) do
-        print(i, emote.name, emote.animationId, emote.price, emote.creator)
-    end
+    const res = await fetch(url, {
+      headers: {
+        "User-Agent": "Roblox/WinInet",
+        "Content-Type": "application/json"
+      }
+    });
 
-    -- Simpan cursor page berikutnya
-    nextCursor = data.nextCursor
-    if not nextCursor then
-        print("Sudah page terakhir.")
-    else
-        print("Next cursor:", nextCursor)
-    end
-end
+    const data = await res.json();
+    if (!data || !data.data) break;
 
--- Fetch pertama
-fetchPage()
--- Fetch page berikutnya
-if nextCursor then fetchPage() end
+    results = data.data;
+    cursor = data.nextPageCursor || null;
+    currentPage++;
+    if (!cursor) break;
+  }
+
+  // Map results to standard emote format with real names and creators
+  const pageResults = results.map(item => {
+    const price =
+      item.priceInRobux === undefined
+        ? 0
+        : item.priceInRobux === 1
+        ? 1 // offsale
+        : item.priceInRobux;
+
+    return {
+      name: item.name || "Unknown",
+      animationId: item.assetId,
+      price: price,
+      creator: item.creator?.name || "Unknown",
+      thumbnail: `rbxthumb://type=Asset&id=${item.assetId}&w=420&h=420`
+    };
+  });
+
+  return {
+    results: pageResults,
+    page,
+    hasNext: !!cursor
+  };
+}
